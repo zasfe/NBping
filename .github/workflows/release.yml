@@ -21,22 +21,12 @@ jobs:
         include:
 
           - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-
-          - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
             archive: tar.gz
 
           - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            archive: tar.gz
-            cross: true
-
-          - os: ubuntu-22.04
             target: aarch64-unknown-linux-musl
             archive: tar.gz
-            cross: true
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -62,66 +52,122 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install MUSL Tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Install Linux Build Tools
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install Cross
-        if: matrix.cross == true
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install Zig
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v1
 
-      - name: Build Native
-        if: matrix.cross != true
+      - name: Install cargo-zigbuild
+        if: runner.os == 'Linux'
+        run: |
+          cargo install cargo-zigbuild
+
+      - name: Build Linux MUSL
+        if: runner.os == 'Linux'
+        run: |
+          cargo zigbuild \
+            --release \
+            --target ${{ matrix.target }}
+
+      - name: Build macOS / Windows
+        if: runner.os != 'Linux'
         run: |
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Build Cross
-        if: matrix.cross == true
+      - name: Generate Package README
+        shell: bash
         run: |
-          cross build --release --target ${{ matrix.target }}
+          cat > README_RELEASE.md << 'EOF'
+          # NBPing
+
+          ## Quick Start
+
+          Linux/macOS
+
+          ```bash
+          chmod +x nbping
+          ./nbping 8.8.8.8
+          ```
+
+          Windows
+
+          ```cmd
+          nbping.exe 8.8.8.8
+          ```
+
+          Help
+
+          ```bash
+          ./nbping --help
+          ```
+          EOF
 
       - name: Package Linux/macOS
         if: runner.os != 'Windows'
         shell: bash
         run: |
+
           mkdir package
 
           cp target/${{ matrix.target }}/release/nbping package/
 
-          tar czf \
-            nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
-            -C package .
+          cp README_RELEASE.md package/README.md
+
+          if [ -f LICENSE ]; then
+            cp LICENSE package/
+          fi
+
+          FILE="nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+
+          tar czf "$FILE" -C package .
+
+          sha256sum "$FILE" > "$FILE.sha256"
 
       - name: Package Windows
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+
           mkdir package
 
           Copy-Item `
             target\${{ matrix.target }}\release\nbping.exe `
             package\
 
+          Copy-Item `
+            README_RELEASE.md `
+            package\README.md
+
+          if (Test-Path LICENSE) {
+            Copy-Item LICENSE package\
+          }
+
+          $FILE="nbping-${{ github.ref_name }}-${{ matrix.target }}.zip"
+
           Compress-Archive `
             -Path package\* `
-            -DestinationPath nbping-${{ github.ref_name }}-${{ matrix.target }}.zip
+            -DestinationPath $FILE
 
-      - name: Upload Artifact Linux/macOS
-        if: runner.os != 'Windows'
+          Get-FileHash `
+            -Algorithm SHA256 `
+            $FILE |
+            Select-Object -ExpandProperty Hash |
+            Out-File "$FILE.sha256"
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: "*.tar.gz"
-
-      - name: Upload Artifact Windows
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: "*.zip"
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+            *.zip
+            *.zip.sha256
 
   release:
 
@@ -137,12 +183,48 @@ jobs:
         with:
           path: dist
 
-      - run: |
-          echo "=== RELEASE FILES ==="
-          find dist -type f
+      - name: Generate Release Notes
+        run: |
 
-      - uses: softprops/action-gh-release@v2
+          cat > RELEASE_NOTES.md << EOF
+          # NBPing ${GITHUB_REF_NAME}
+
+          ## Downloads
+
+          | OS | Download |
+          |----|----|
+          | Rocky Linux 8 | x86_64-unknown-linux-musl |
+          | Rocky Linux 9 | x86_64-unknown-linux-musl |
+          | AlmaLinux | x86_64-unknown-linux-musl |
+          | CentOS 7 | x86_64-unknown-linux-musl |
+          | Ubuntu | x86_64-unknown-linux-musl |
+          | Raspberry Pi 64bit | aarch64-unknown-linux-musl |
+          | AWS Graviton | aarch64-unknown-linux-musl |
+          | Oracle ARM | aarch64-unknown-linux-musl |
+          | macOS Intel | x86_64-apple-darwin |
+          | macOS Apple Silicon | aarch64-apple-darwin |
+          | Windows x64 | x86_64-pc-windows-msvc |
+
+          ## Verify
+
+          \`\`\`bash
+          sha256sum -c *.sha256
+          \`\`\`
+
+          ## Quick Start
+
+          \`\`\`bash
+          chmod +x nbping
+          ./nbping 8.8.8.8
+          \`\`\`
+          EOF
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
         with:
+          body_path: RELEASE_NOTES.md
           files: |
             dist/**/*.tar.gz
+            dist/**/*.tar.gz.sha256
             dist/**/*.zip
+            dist/**/*.zip.sha256
