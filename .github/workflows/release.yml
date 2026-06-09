@@ -22,23 +22,15 @@ jobs:
 
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
-            archive: tar.gz
-
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-musl
-            archive: tar.gz
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
 
           - os: macos-latest
             target: x86_64-apple-darwin
-            archive: tar.gz
 
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar.gz
 
     runs-on: ${{ matrix.os }}
 
@@ -52,34 +44,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Linux Build Tools
-        if: runner.os == 'Linux'
+      - name: Install MUSL
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install Zig
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v1
-
-      - name: Install cargo-zigbuild
-        if: runner.os == 'Linux'
+      - name: Build Linux
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          cargo install cargo-zigbuild
+          cargo build \
+            --release \
+            --target x86_64-unknown-linux-musl
 
-      - name: Build Linux MUSL
-        if: runner.os == 'Linux'
+      - name: Build Others
+        if: matrix.target != 'x86_64-unknown-linux-musl'
         run: |
-          cargo zigbuild \
+          cargo build \
             --release \
             --target ${{ matrix.target }}
 
-      - name: Build macOS / Windows
-        if: runner.os != 'Linux'
-        run: |
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Generate Package README
+      - name: Generate README
         shell: bash
         run: |
           cat > README_RELEASE.md << 'EOF'
@@ -89,22 +74,16 @@ jobs:
 
           Linux/macOS
 
-          ```bash
           chmod +x nbping
           ./nbping 8.8.8.8
-          ```
 
           Windows
 
-          ```cmd
           nbping.exe 8.8.8.8
-          ```
 
           Help
 
-          ```bash
           ./nbping --help
-          ```
           EOF
 
       - name: Package Linux/macOS
@@ -115,12 +94,9 @@ jobs:
           mkdir package
 
           cp target/${{ matrix.target }}/release/nbping package/
-
           cp README_RELEASE.md package/README.md
 
-          if [ -f LICENSE ]; then
-            cp LICENSE package/
-          fi
+          [ -f LICENSE ] && cp LICENSE package/
 
           FILE="nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
 
@@ -139,9 +115,7 @@ jobs:
             target\${{ matrix.target }}\release\nbping.exe `
             package\
 
-          Copy-Item `
-            README_RELEASE.md `
-            package\README.md
+          Copy-Item README_RELEASE.md package\README.md
 
           if (Test-Path LICENSE) {
             Copy-Item LICENSE package\
@@ -159,8 +133,7 @@ jobs:
             Select-Object -ExpandProperty Hash |
             Out-File "$FILE.sha256"
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: |
@@ -191,36 +164,24 @@ jobs:
 
           ## Downloads
 
-          | OS | Download |
-          |----|----|
+          | Platform | File |
+          |----------|----------|
           | Rocky Linux 8 | x86_64-unknown-linux-musl |
           | Rocky Linux 9 | x86_64-unknown-linux-musl |
           | AlmaLinux | x86_64-unknown-linux-musl |
-          | CentOS 7 | x86_64-unknown-linux-musl |
+          | Oracle Linux | x86_64-unknown-linux-musl |
           | Ubuntu | x86_64-unknown-linux-musl |
-          | Raspberry Pi 64bit | aarch64-unknown-linux-musl |
-          | AWS Graviton | aarch64-unknown-linux-musl |
-          | Oracle ARM | aarch64-unknown-linux-musl |
+          | CentOS 7 | x86_64-unknown-linux-musl |
+          | Windows | x86_64-pc-windows-msvc |
           | macOS Intel | x86_64-apple-darwin |
           | macOS Apple Silicon | aarch64-apple-darwin |
-          | Windows x64 | x86_64-pc-windows-msvc |
 
           ## Verify
 
-          \`\`\`bash
           sha256sum -c *.sha256
-          \`\`\`
-
-          ## Quick Start
-
-          \`\`\`bash
-          chmod +x nbping
-          ./nbping 8.8.8.8
-          \`\`\`
           EOF
 
-      - name: Publish Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           body_path: RELEASE_NOTES.md
           files: |
