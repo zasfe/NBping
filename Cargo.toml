@@ -16,3 +16,9 @@ prometheus = "0.13"
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "http2"] }
 http-body-util = "0.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
