@@ -28,6 +28,16 @@ jobs:
             target: x86_64-unknown-linux-musl
             archive: tar.gz
 
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
+
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+            archive: tar.gz
+            cross: true
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
@@ -58,9 +68,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Build
+      - name: Install Cross
+        if: matrix.cross == true
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build Native
+        if: matrix.cross != true
         run: |
           cargo build --release --target ${{ matrix.target }}
+
+      - name: Build Cross
+        if: matrix.cross == true
+        run: |
+          cross build --release --target ${{ matrix.target }}
 
       - name: Package Linux/macOS
         if: runner.os != 'Windows'
@@ -112,18 +133,15 @@ jobs:
 
     steps:
 
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: Verify Files
-        run: |
-          echo "=== Release Files ==="
+      - run: |
+          echo "=== RELEASE FILES ==="
           find dist -type f
 
-      - name: Publish Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/**/*.tar.gz
