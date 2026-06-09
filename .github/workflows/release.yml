@@ -3,47 +3,111 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          # (required) GitHub token for creating GitHub Releases.
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-  upload-assets:
-    needs: create-release
+  build:
+
     strategy:
+      fail-fast: false
+
       matrix:
         include:
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: universal-apple-darwin
-            os: macos-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-musl
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
     runs-on: ${{ matrix.os }}
+
     steps:
+
       - uses: actions/checkout@v4
-      - uses: taiki-e/upload-rust-binary-action@v1
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
-          # Note that glob pattern is not supported yet.
-          bin: nbping
-          # (optional) Target triple, default is host triple.
-          target: ${{ matrix.target }}
-          # (required) GitHub token for uploading assets to GitHub Releases.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          targets: ${{ matrix.target }}
+
+      - name: Install MUSL tools
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir package
+
+          cp target/${{ matrix.target }}/release/nbping package/
+
+          tar czf \
+            nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
+            -C package .
+
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: |
+          mkdir package
+
+          cp target/${{ matrix.target }}/release/nbping package/
+
+          tar czf \
+            nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
+            -C package .
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          mkdir package
+
+          copy `
+            target\${{ matrix.target }}\release\nbping.exe `
+            package\
+
+          Compress-Archive `
+            -Path package\* `
+            -DestinationPath nbping-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+      - name: Upload Linux/macOS
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.gz
+
+      - name: Upload Windows
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.zip
