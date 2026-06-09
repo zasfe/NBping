@@ -14,31 +14,28 @@ env:
 APP_NAME: nbping
 
 jobs:
-
 build:
 
 ```
 strategy:
   fail-fast: false
-
   matrix:
     include:
-
       - os: ubuntu-22.04
         target: x86_64-unknown-linux-musl
-        ext: tar.gz
+        binary: nbping
 
       - os: windows-latest
         target: x86_64-pc-windows-msvc
-        ext: zip
+        binary: nbping.exe
 
       - os: macos-latest
         target: x86_64-apple-darwin
-        ext: tar.gz
+        binary: nbping
 
       - os: macos-latest
         target: aarch64-apple-darwin
-        ext: tar.gz
+        binary: nbping
 
 runs-on: ${{ matrix.os }}
 
@@ -46,15 +43,6 @@ steps:
 
   - name: Checkout
     uses: actions/checkout@v4
-
-  - name: Determine Version
-    shell: bash
-    run: |
-      if [ "${{ github.event_name }}" = "release" ]; then
-        echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
-      else
-        echo "VERSION=manual-build" >> $GITHUB_ENV
-      fi
 
   - name: Setup Rust
     uses: dtolnay/rust-toolchain@stable
@@ -71,92 +59,28 @@ steps:
       sudo apt-get install -y musl-tools
 
   - name: Build
-    run: cargo build --release --target ${{ matrix.target }}
+    run: cargo build --release --locked --target ${{ matrix.target }}
 
-  - name: Generate README
+  - name: Prepare Artifact
     shell: bash
     run: |
-      cat > README_RELEASE.md <<'EOF'
-      # NBPing
+      mkdir -p artifact
 
-      ## Quick Start
+      cp target/${{ matrix.target }}/release/${{ matrix.binary }} artifact/
 
-      Linux / macOS
-
-          chmod +x nbping
-          ./nbping 8.8.8.8
-
-      Windows
-
-          nbping.exe 8.8.8.8
-
-      Help
-
-          ./nbping --help
-      EOF
-
-  - name: Package Linux/macOS
-    if: runner.os != 'Windows'
-    shell: bash
-    run: |
-
-      mkdir package
-
-      cp target/${{ matrix.target }}/release/nbping package/
-      cp README_RELEASE.md package/README.md
-
-      if [ -f LICENSE ]; then
-        cp LICENSE package/
+      if [ -f README.md ]; then
+        cp README.md artifact/
       fi
 
-      FILE="${APP_NAME}-${VERSION}-${{ matrix.target }}.tar.gz"
+      if [ -f LICENSE ]; then
+        cp LICENSE artifact/
+      fi
 
-      tar czf "$FILE" -C package .
-
-      sha256sum "$FILE" > "$FILE.sha256"
-
-  - name: Package Windows
-    if: runner.os == 'Windows'
-    shell: pwsh
-    run: |
-
-      New-Item `
-        -ItemType Directory `
-        -Force `
-        package | Out-Null
-
-      Copy-Item `
-        target\${{ matrix.target }}\release\nbping.exe `
-        package\
-
-      Copy-Item `
-        README_RELEASE.md `
-        package\README.md
-
-      if (Test-Path LICENSE) {
-        Copy-Item LICENSE package\
-      }
-
-      $File = "${env:APP_NAME}-${env:VERSION}-${{ matrix.target }}.zip"
-
-      Compress-Archive `
-        -Path package\* `
-        -DestinationPath $File `
-        -Force
-
-      (Get-FileHash `
-        -Algorithm SHA256 `
-        $File).Hash | Out-File "$File.sha256"
-
-  - name: Upload Artifacts
+  - name: Upload Artifact
     uses: actions/upload-artifact@v4
     with:
       name: ${{ matrix.target }}
-      path: |
-        *.tar.gz
-        *.tar.gz.sha256
-        *.zip
-        *.zip.sha256
+      path: artifact/
 ```
 
 release:
@@ -175,53 +99,79 @@ steps:
     with:
       path: dist
 
+  - name: Set Version
+    run: |
+      echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+
+  - name: Package Release Files
+    shell: bash
+    run: |
+
+      mkdir -p release
+
+      for dir in dist/*; do
+
+        target=$(basename "$dir")
+
+        if [[ "$target" == *windows* ]]; then
+
+          file="${APP_NAME}-${VERSION}-${target}.zip"
+
+          (
+            cd "$dir"
+            zip -rq "../../release/$file" .
+          )
+
+          sha256sum "release/$file" > "release/$file.sha256"
+
+        else
+
+          file="${APP_NAME}-${VERSION}-${target}.tar.gz"
+
+          tar czf \
+            "release/$file" \
+            -C "$dir" .
+
+          sha256sum "release/$file" > "release/$file.sha256"
+
+        fi
+
+      done
+
   - name: Generate Release Notes
     shell: bash
     run: |
 
-      VERSION="${{ github.event.release.tag_name }}"
-
       cat > RELEASE_NOTES.md <<EOF
       # NBPing ${VERSION}
 
-      ## 지원 플랫폼
+      ## Supported Platforms
 
-      | 플랫폼 | 파일 |
-      |----------|----------|
+      | Platform | Target |
+      |-----------|-----------|
       | Rocky Linux 8 | x86_64-unknown-linux-musl |
       | Rocky Linux 9 | x86_64-unknown-linux-musl |
-      | AlmaLinux | x86_64-unknown-linux-musl |
-      | Oracle Linux | x86_64-unknown-linux-musl |
-      | Ubuntu | x86_64-unknown-linux-musl |
       | CentOS 7 | x86_64-unknown-linux-musl |
+      | Ubuntu | x86_64-unknown-linux-musl |
       | Windows x64 | x86_64-pc-windows-msvc |
       | macOS Intel | x86_64-apple-darwin |
       | macOS Apple Silicon | aarch64-apple-darwin |
 
-      ## Quick Start
+      ## Verify
 
-      Linux / macOS
-
-          tar xzf nbping-*.tar.gz
-          chmod +x nbping
-          ./nbping 8.8.8.8
-
-      Windows
-
-          nbping.exe 8.8.8.8
-
-      ## SHA256 검증
-
-          sha256sum -c *.sha256
+      \`\`\`bash
+      sha256sum -c *.sha256
+      \`\`\`
       EOF
 
-  - name: Publish Release Assets
+  - name: Publish Release
     uses: softprops/action-gh-release@v2
     with:
+      overwrite_files: true
       body_path: RELEASE_NOTES.md
       files: |
-        dist/**/*.tar.gz
-        dist/**/*.tar.gz.sha256
-        dist/**/*.zip
-        dist/**/*.zip.sha256
+        release/*.tar.gz
+        release/*.tar.gz.sha256
+        release/*.zip
+        release/*.zip.sha256
 ```
