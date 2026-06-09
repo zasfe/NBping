@@ -4,18 +4,14 @@ on:
   push:
     tags:
       - "v*"
+
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: "Release Tag"
-        required: false
-        default: "manual"
 
 permissions:
   contents: write
- 
+
 jobs:
- 
+
   build:
 
     strategy:
@@ -26,24 +22,23 @@ jobs:
 
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            archive: tar.gz
 
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-musl
-
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-musl
+            archive: tar.gz
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            archive: zip
 
           - os: macos-latest
             target: x86_64-apple-darwin
+            archive: tar.gz
 
           - os: macos-latest
             target: aarch64-apple-darwin
+            archive: tar.gz
 
     runs-on: ${{ matrix.os }}
 
@@ -55,32 +50,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install MUSL tools
-        if: contains(matrix.target, 'musl')
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install MUSL Tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: |
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Package Linux
-        if: runner.os == 'Linux'
-        run: |
-          mkdir package
-
-          cp target/${{ matrix.target }}/release/nbping package/
-
-          tar czf \
-            nbping-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
-            -C package .
-
-      - name: Package macOS
-        if: runner.os == 'macOS'
+      - name: Package Linux/macOS
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           mkdir package
 
@@ -96,7 +80,7 @@ jobs:
         run: |
           mkdir package
 
-          copy `
+          Copy-Item `
             target\${{ matrix.target }}\release\nbping.exe `
             package\
 
@@ -104,16 +88,43 @@ jobs:
             -Path package\* `
             -DestinationPath nbping-${{ github.ref_name }}-${{ matrix.target }}.zip
 
-      - name: Upload Linux/macOS
+      - name: Upload Artifact Linux/macOS
         if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            *.tar.gz
+          name: ${{ matrix.target }}
+          path: "*.tar.gz"
 
-      - name: Upload Windows
+      - name: Upload Artifact Windows
         if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: "*.zip"
+
+  release:
+
+    needs: build
+
+    if: startsWith(github.ref, 'refs/tags/')
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Verify Files
+        run: |
+          echo "=== Release Files ==="
+          find dist -type f
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            *.zip
+            dist/**/*.tar.gz
+            dist/**/*.zip
